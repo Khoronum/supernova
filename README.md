@@ -4,6 +4,8 @@
 
 Native Linux configuration utility for HATOR gaming mice. Includes a CLI based `supernova-cli` and QT6 interface.
 
+![Supernova UI](img/ui.png)
+
 ## Features
 - **DPI Stages & Active Stage Switching**: Configure up to 8 DPI stages (6 enabled by default), switch active stage instantaneously, adjust independent X/Y DPI (on supported sensors), and set per-stage indicator LED colors.
 - **Sensor Support**: Supports features in the following sensors:
@@ -40,9 +42,6 @@ devenv shell -- cargo build --workspace
 
 # Launch the Qt 6 GUI
 devenv shell -- cargo run -p supernova-qt --bin supernova
-
-# Launch GUI in offline Demo Mode (no hardware/udev permissions needed)
-devenv shell -- cargo run -p supernova-qt --bin supernova -- --demo
 ```
 
 ### CLI Usage (`supernova-cli`)

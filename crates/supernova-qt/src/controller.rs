@@ -389,7 +389,7 @@ impl qobject::MouseController {
                     meta.product_name
                 )));
                 self.as_mut().set_error_message(QString::from(&format!(
-                    "Permission denied opening {path}. Install udev/70-hator-mouse.rules or try Demo Mode."
+                    "Permission denied opening {path}. Install udev/70-hator-mouse.rules and reload udev rules."
                 )));
                 return;
             }
@@ -473,6 +473,7 @@ impl qobject::MouseController {
         self.sync_ui_from_active(&format!("Connected to {}", meta.product_name), "");
     }
 
+    /// Deprecated from user-facing UI; retained for offline development/testing via `--demo` or `SUPERNOVA_DEMO=1`.
     pub fn apply_demo_mode(mut self: Pin<&mut Self>, enabled: bool) {
         if !enabled {
             self.as_mut().set_demo_mode(false);

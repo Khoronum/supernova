@@ -307,13 +307,14 @@ ApplicationWindow {
                 }
 
                 Button {
-                    text: controller.demoMode ? "Exit Demo" : "Demo Mode"
+                    visible: controller.demoMode
+                    text: "Exit Demo"
                     implicitHeight: 32
                     hoverEnabled: true
-                    onClicked: controller.applyDemoMode(!controller.demoMode)
+                    onClicked: controller.applyDemoMode(false)
                     contentItem: Text {
                         text: parent.text
-                        color: controller.demoMode ? theme.textOnAccent : theme.accentText
+                        color: theme.textOnAccent
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
                         horizontalAlignment: Text.AlignHCenter
@@ -323,8 +324,7 @@ ApplicationWindow {
                     }
                     background: Rectangle {
                         radius: 6
-                        color: controller.demoMode ? theme.accent
-                             : (parent.hovered ? theme.accentSoft : theme.bgControl)
+                        color: parent.hovered ? theme.accentHover : theme.accent
                         border.color: theme.accent
                     }
                 }
@@ -351,42 +351,15 @@ ApplicationWindow {
                 anchors.margins: 14
                 spacing: 8
 
-                RowLayout {
+                Text {
                     Layout.fillWidth: true
-                    spacing: 10
-
-                    Text {
-                        Layout.fillWidth: true
-                        text: controller.errorMessage.length > 0
-                              ? controller.errorMessage
-                              : controller.statusMessage
-                        color: controller.permissionDenied ? theme.warningText : theme.textPrimary
-                        font.pixelSize: 13
-                        font.weight: Font.Medium
-                        wrapMode: Text.WordWrap
-                    }
-
-                    Button {
-                        visible: !controller.demoMode
-                        text: "Try Demo Mode"
-                        implicitHeight: 30
-                        hoverEnabled: true
-                        onClicked: controller.applyDemoMode(true)
-                        contentItem: Text {
-                            text: parent.text
-                            color: theme.textOnAccent
-                            font.pixelSize: 12
-                            font.weight: Font.Bold
-                            horizontalAlignment: Text.AlignHCenter
-                            verticalAlignment: Text.AlignVCenter
-                            leftPadding: 10
-                            rightPadding: 10
-                        }
-                        background: Rectangle {
-                            radius: 6
-                            color: parent.hovered ? theme.accentHover : theme.accent
-                        }
-                    }
+                    text: controller.errorMessage.length > 0
+                          ? controller.errorMessage
+                          : controller.statusMessage
+                    color: controller.permissionDenied ? theme.warningText : theme.textPrimary
+                    font.pixelSize: 13
+                    font.weight: Font.Medium
+                    wrapMode: Text.WordWrap
                 }
 
                 TextField {
