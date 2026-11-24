@@ -23,6 +23,7 @@ in
     pkgs.pkg-config
     pkgs.udev
     pkgs.libglvnd
+    pkgs.mesa
     pkgs.gcc
     pkgs.mold
     pkgs.git
@@ -39,7 +40,16 @@ in
 
   enterShell = ''
     unset QT_QPA_PLATFORMTHEME QT_QPA_PLATFORMTHEME_QT6
-    export LD_LIBRARY_PATH="${qtEnv}/lib:${lib.makeLibraryPath [ pkgs.udev pkgs.libglvnd ]}:''${LD_LIBRARY_PATH:-}"
+    if [ ! -d /run/opengl-driver/lib ]; then
+      export __EGL_VENDOR_LIBRARY_DIRS="''${__EGL_VENDOR_LIBRARY_DIRS:+$__EGL_VENDOR_LIBRARY_DIRS:}${pkgs.mesa}/share/glvnd/egl_vendor.d"
+      export LIBGL_DRIVERS_PATH="''${LIBGL_DRIVERS_PATH:+$LIBGL_DRIVERS_PATH:}${pkgs.mesa}/lib/dri"
+      if [ -d "${pkgs.mesa}/lib/gbm" ]; then
+        export GBM_BACKENDS_PATH="''${GBM_BACKENDS_PATH:+$GBM_BACKENDS_PATH:}${pkgs.mesa}/lib/gbm"
+      fi
+      export LD_LIBRARY_PATH="${qtEnv}/lib:${lib.makeLibraryPath [ pkgs.udev pkgs.libglvnd pkgs.mesa ]}:''${LD_LIBRARY_PATH:-}"
+    else
+      export LD_LIBRARY_PATH="${qtEnv}/lib:${lib.makeLibraryPath [ pkgs.udev pkgs.libglvnd ]}:/run/opengl-driver/lib:''${LD_LIBRARY_PATH:-}"
+    fi
   '';
 
   scripts = {
