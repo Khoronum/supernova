@@ -64,4 +64,19 @@ devenv shell -- cargo run -p supernova-core --bin supernova-cli -- dpi set 3 160
 devenv shell -- cargo run -p supernova-core --bin supernova-cli -- rate 1000
 ```
 
+## Building Portable Release Binaries (AppImage & CLI)
+
+To build cross-distro release binaries (`glibc 2.35` / Ubuntu 22.04+ compatible) without requiring `devenv` at runtime, run the Podman builder:
+
+```bash
+./packaging/appimage/build.sh
+```
+
+Pass `--rebuild-image` to force rebuilding the builder container image.
+
+Build outputs are written to `dist/`:
+- `dist/Supernova-x86_64.AppImage` — standalone Qt 6.8.3 GUI AppImage
+- `dist/supernova-cli` — standalone CLI binary (depends only on `glibc >= 2.35` and `libudev.so.1`)
+- `dist/70-hator-mouse.rules` — udev rule to install into `/etc/udev/rules.d/`
+
 

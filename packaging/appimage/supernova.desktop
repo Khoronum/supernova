@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Supernova
+Comment=Configure HATOR gaming mice on Linux
+Exec=supernova
+Icon=supernova
+Categories=Utility;HardwareSettings;Settings;
+Terminal=false
+StartupWMClass=supernova

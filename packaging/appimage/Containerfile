@@ -1,0 +1,72 @@
+FROM ubuntu:22.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG QT_VERSION=6.8.3
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    ninja-build \
+    pkg-config \
+    git \
+    curl \
+    ca-certificates \
+    file \
+    patchelf \
+    desktop-file-utils \
+    p7zip-full \
+    python3 \
+    python3-pip \
+    libudev-dev \
+    libgl1-mesa-dev \
+    libegl1-mesa-dev \
+    libvulkan-dev \
+    libxkbcommon-dev \
+    libxkbcommon-x11-0 \
+    libxcb-cursor0 \
+    libxcb-icccm4 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-render-util0 \
+    libxcb-shape0 \
+    libxcb-xfixes0 \
+    libxcb-xinerama0 \
+    libxcb-xkb1 \
+    libx11-xcb1 \
+    libwayland-dev \
+    libwayland-client0 \
+    libwayland-cursor0 \
+    libwayland-egl1 \
+    libdbus-1-3 \
+    libfontconfig1 \
+    libfreetype6 \
+    libglib2.0-0 \
+    libnss3 && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir aqtinstall
+
+RUN aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 -O /opt/Qt && \
+    AVAIL="$(aqt list-qt linux desktop --modules "${QT_VERSION}" linux_gcc_64 || true)" && \
+    MODS=""; \
+    for m in qtshadertools qtsvg qtwayland; do \
+      if echo "$AVAIL" | tr '[:space:]' '\n' | grep -qx "$m"; then MODS="$MODS $m"; fi; \
+    done && \
+    if [ -n "$MODS" ]; then aqt install-qt linux desktop "${QT_VERSION}" linux_gcc_64 -O /opt/Qt -m $MODS; fi
+
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    QT_DIR=/opt/Qt/6.8.3/gcc_64 \
+    QMAKE=/opt/Qt/6.8.3/gcc_64/bin/qmake \
+    PATH=/opt/cargo/bin:/opt/Qt/6.8.3/gcc_64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    APPIMAGE_EXTRACT_AND_RUN=1 \
+    ARCH=x86_64
+
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable
+
+RUN curl -fsSL -o /usr/local/bin/linuxdeploy \
+      https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage && \
+    curl -fsSL -o /usr/local/bin/linuxdeploy-plugin-qt \
+      https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage && \
+    chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-qt

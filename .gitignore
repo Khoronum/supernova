@@ -8,3 +8,7 @@ result
 result-*
 .qmlls.ini
 PROTO.md
+/dist/
+
+# what, you thought i would show this?
+AGENTS.md
