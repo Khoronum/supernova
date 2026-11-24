@@ -1,3 +1,4 @@
 # HATOR / Compx Gaming Mice (VID 0x379A) - grant desktop user access to hidraw
+# Must be numbered before 71-seat.rules / 73-seat-late.rules so systemd applies the uaccess ACL.
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="379a", MODE="0660", TAG+="uaccess"
 SUBSYSTEM=="usb", ATTR{idVendor}=="379a", MODE="0660", TAG+="uaccess"

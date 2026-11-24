@@ -25,7 +25,7 @@ const MAX_EXCHANGE_RETRIES: usize = 3;
 pub enum HidError {
     #[error("No HATOR mouse found on USB HID")]
     DeviceNotFound,
-    #[error("Permission denied opening {path} (install udev/99-hator-mouse.rules)")]
+    #[error("Permission denied opening {path} (install udev/70-hator-mouse.rules)")]
     PermissionDenied { path: String },
     #[error("Mouse is offline or asleep — move the mouse to wake it")]
     MouseOffline,

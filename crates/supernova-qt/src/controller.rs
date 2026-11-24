@@ -135,7 +135,7 @@ use supernova_core::{
 };
 
 const UDEV_HELP_CMD: &str =
-    "sudo cp udev/99-hator-mouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger";
+    "sudo cp udev/70-hator-mouse.rules /etc/udev/rules.d/ && sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -355,7 +355,7 @@ impl qobject::MouseController {
                     meta.product_name
                 )));
                 self.as_mut().set_error_message(QString::from(&format!(
-                    "Permission denied opening {path}. Install udev/99-hator-mouse.rules or try Demo Mode."
+                    "Permission denied opening {path}. Install udev/70-hator-mouse.rules or try Demo Mode."
                 )));
                 return;
             }

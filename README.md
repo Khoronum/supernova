@@ -22,10 +22,12 @@ Native Linux configuration utility for HATOR gaming mice. Includes a CLI based `
 Linux restricts `/dev/hidraw*` to `root` by default. Either run commands via root or install the provided udev rule and reload:
 
 ```bash
-sudo cp udev/99-hator-mouse.rules /etc/udev/rules.d/
+sudo cp udev/70-hator-mouse.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
-sudo udevadm trigger
+sudo udevadm trigger --subsystem-match=hidraw --subsystem-match=usb
 ```
+
+> **Note:** If you previously installed `99-hator-mouse.rules`, remove `/etc/udev/rules.d/99-hator-mouse.rules` because `TAG+="uaccess"` must be evaluated before systemd's `73-seat-late.rules`.
 
 Unplug and replug the mouse or wireless receiver if needed.
 
