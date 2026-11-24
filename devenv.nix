@@ -39,7 +39,8 @@ in
   };
 
   enterShell = ''
-    unset QT_QPA_PLATFORMTHEME QT_QPA_PLATFORMTHEME_QT6
+    unset QT_QPA_PLATFORMTHEME_QT6
+    export QT_QPA_PLATFORMTHEME=xdgdesktopportal
     if [ ! -d /run/opengl-driver/lib ]; then
       export __EGL_VENDOR_LIBRARY_DIRS="''${__EGL_VENDOR_LIBRARY_DIRS:+$__EGL_VENDOR_LIBRARY_DIRS:}${pkgs.mesa}/share/glvnd/egl_vendor.d"
       export LIBGL_DRIVERS_PATH="''${LIBGL_DRIVERS_PATH:+$LIBGL_DRIVERS_PATH:}${pkgs.mesa}/lib/dri"

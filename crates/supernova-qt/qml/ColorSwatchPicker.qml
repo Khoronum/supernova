@@ -1,9 +1,11 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import com.supernova.ui 1.0
 
-RowLayout {
+Flow {
     id: picker
+    required property AppTheme theme
     property string selectedColor: "#FFFF00"
     property bool controlsEnabled: true
     signal colorChosen(string hexColor)
@@ -25,12 +27,13 @@ RowLayout {
         model: picker.swatches
         delegate: Rectangle {
             required property string modelData
-            width: 24
-            height: 24
-            radius: 12
+            readonly property bool selected: picker.selectedColor.toUpperCase() === modelData
+            width: 26
+            height: 26
+            radius: 13
             color: modelData
-            border.width: picker.selectedColor.toUpperCase() === modelData ? 3 : 1
-            border.color: picker.selectedColor.toUpperCase() === modelData ? "#FFFFFF" : "#444454"
+            border.width: selected ? 3 : 1
+            border.color: selected ? picker.theme.textPrimary : picker.theme.borderControl
             opacity: picker.controlsEnabled ? 1.0 : 0.45
 
             MouseArea {
@@ -44,21 +47,24 @@ RowLayout {
 
     TextField {
         id: hexInput
-        Layout.preferredWidth: 96
-        Layout.preferredHeight: 30
+        width: 96
+        height: 28
         enabled: picker.controlsEnabled
         text: picker.selectedColor
-        color: "#F4F4F6"
+        color: picker.enabled ? picker.theme.textPrimary : picker.theme.textDisabled
+        selectionColor: picker.theme.accent
+        selectedTextColor: picker.theme.textOnAccent
         font.family: "monospace"
         font.pixelSize: 12
         horizontalAlignment: Text.AlignHCenter
+        verticalAlignment: Text.AlignVCenter
         maximumLength: 7
         selectByMouse: true
         background: Rectangle {
-            color: "#141419"
+            color: picker.enabled ? picker.theme.bgInput : picker.theme.bgCardDisabled
             radius: 6
-            border.width: hexInput.activeFocus ? 1 : 1
-            border.color: hexInput.activeFocus ? "#E1BD22" : "#323240"
+            border.width: 1
+            border.color: hexInput.activeFocus ? picker.theme.accent : picker.theme.borderControl
         }
         onAccepted: {
             if (/^#[0-9A-Fa-f]{6}$/.test(text)) {
