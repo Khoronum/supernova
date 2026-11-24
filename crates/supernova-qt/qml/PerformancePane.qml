@@ -9,6 +9,14 @@ ColumnLayout {
     required property AppTheme theme
     required property bool controlsReady
     property bool showSectionHeader: false
+    readonly property var supportedPollingRates: {
+        try {
+            let parsed = JSON.parse(controller.supportedPollingRatesJson)
+            return Array.isArray(parsed) && parsed.length > 0 ? parsed : [125, 250, 500, 1000]
+        } catch (e) {
+            return [125, 250, 500, 1000]
+        }
+    }
 
     signal requestFactoryReset()
 
@@ -38,21 +46,38 @@ ColumnLayout {
             anchors.margins: 16
             spacing: 12
 
-            Text {
-                text: "USB Polling Rate"
-                color: perfPane.theme.textPrimary
-                font.pixelSize: 15
-                font.weight: Font.Bold
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                Text {
+                    text: "USB Polling Rate"
+                    color: perfPane.theme.textPrimary
+                    font.pixelSize: 15
+                    font.weight: Font.Bold
+                }
+
+                Item { Layout.fillWidth: true }
+
+                Text {
+                    visible: perfPane.controller.connected && perfPane.controller.pollingRateLimitNote.length > 0
+                    text: perfPane.controller.pollingRateLimitNote
+                    color: perfPane.theme.textMuted
+                    font.pixelSize: 11
+                    font.weight: Font.Medium
+                }
             }
 
             GridLayout {
                 Layout.fillWidth: true
-                columns: perfPane.width >= 580 ? 7 : 4
+                columns: perfPane.width >= 580
+                         ? Math.max(1, perfPane.supportedPollingRates.length)
+                         : Math.min(4, Math.max(1, perfPane.supportedPollingRates.length))
                 columnSpacing: 8
                 rowSpacing: 8
 
                 Repeater {
-                    model: [125, 250, 500, 1000, 2000, 4000, 8000]
+                    model: perfPane.supportedPollingRates
                     delegate: Button {
                         required property int modelData
                         readonly property bool selected: perfPane.controller.pollingRateHz === modelData
@@ -81,12 +106,27 @@ ColumnLayout {
                     }
                 }
             }
+
+            Text {
+                Layout.fillWidth: true
+                visible: perfPane.controlsReady && perfPane.controller.pollingRateHz > perfPane.controller.maxPollingRateHz
+                text: "\u26A0 Current onboard rate (" + perfPane.controller.pollingRateHz + " Hz) exceeds this connection's "
+                      + perfPane.controller.maxPollingRateHz + " Hz limit. Select a supported rate above."
+                color: perfPane.theme.warningText
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap
+            }
         }
     }
 
     // Sensor Tuning & LOD Card
     Rectangle {
         Layout.fillWidth: true
+        visible: perfPane.controller.supportsLod
+              || perfPane.controller.supportsMotionSync
+              || perfPane.controller.supportsAngleSnapping
+              || perfPane.controller.supportsRippleControl
+              || perfPane.controller.supportsHighPerformance
         implicitHeight: sensorCol.implicitHeight + 32
         radius: 12
         color: perfPane.theme.bgCard
@@ -100,7 +140,9 @@ ColumnLayout {
             spacing: 14
 
             Text {
-                text: "Sensor Features & Lift-Off Distance"
+                text: perfPane.controller.supportsLod
+                      ? "Sensor Features & Lift-Off Distance"
+                      : "Sensor Features"
                 color: perfPane.theme.textPrimary
                 font.pixelSize: 15
                 font.weight: Font.Bold
@@ -108,6 +150,7 @@ ColumnLayout {
 
             RowLayout {
                 Layout.fillWidth: true
+                visible: perfPane.controller.supportsLod
                 spacing: 10
 
                 Text {
@@ -169,6 +212,7 @@ ColumnLayout {
                 ThemedSwitch {
                     theme: perfPane.theme
                     Layout.fillWidth: true
+                    visible: perfPane.controller.supportsMotionSync
                     enabled: perfPane.controlsReady
                     checked: perfPane.controller.motionSync
                     text: "Motion Sync"
@@ -177,6 +221,7 @@ ColumnLayout {
                 ThemedSwitch {
                     theme: perfPane.theme
                     Layout.fillWidth: true
+                    visible: perfPane.controller.supportsAngleSnapping
                     enabled: perfPane.controlsReady
                     checked: perfPane.controller.angleSnapping
                     text: "Angle Snapping"
@@ -185,6 +230,7 @@ ColumnLayout {
                 ThemedSwitch {
                     theme: perfPane.theme
                     Layout.fillWidth: true
+                    visible: perfPane.controller.supportsRippleControl
                     enabled: perfPane.controlsReady
                     checked: perfPane.controller.rippleControl
                     text: "Ripple Control"
@@ -193,6 +239,7 @@ ColumnLayout {
                 ThemedSwitch {
                     theme: perfPane.theme
                     Layout.fillWidth: true
+                    visible: perfPane.controller.supportsHighPerformance
                     enabled: perfPane.controlsReady
                     checked: perfPane.controller.highPerformance
                     text: "High Performance Mode"

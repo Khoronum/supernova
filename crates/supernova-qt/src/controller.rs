@@ -42,13 +42,21 @@ pub mod qobject {
         #[qproperty(i32, dpi_led_brightness)]
         #[qproperty(i32, dpi_led_speed)]
         #[qproperty(i32, polling_rate_hz)]
+        #[qproperty(i32, max_polling_rate_hz)]
+        #[qproperty(QString, supported_polling_rates_json)]
+        #[qproperty(QString, polling_rate_limit_note)]
         #[qproperty(i32, lod_level)]
+        #[qproperty(bool, supports_lod)]
         #[qproperty(i32, debounce_ms)]
         #[qproperty(i32, sleep_minutes)]
         #[qproperty(bool, motion_sync)]
+        #[qproperty(bool, supports_motion_sync)]
         #[qproperty(bool, angle_snapping)]
+        #[qproperty(bool, supports_angle_snapping)]
         #[qproperty(bool, ripple_control)]
+        #[qproperty(bool, supports_ripple_control)]
         #[qproperty(bool, high_performance)]
+        #[qproperty(bool, supports_high_performance)]
         type MouseController = super::MouseControllerRust;
 
         #[qinvokable]
@@ -129,9 +137,11 @@ use core::pin::Pin;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use serde::Serialize;
+use supernova_core::devices::profile_for_mid;
 use supernova_core::{
-    discover_devices, BatteryStatus, DpiLedMode, HatorDevice, HidError, HidapiTransport, LodLevel,
-    MouseConfig, PollingRate, SensorKind,
+    discover_devices, BatteryStatus, ConnectionKind, DeviceCapabilities, DpiLedMode, HatorDevice,
+    HidError, HidapiTransport, LodLevel, MouseConfig, PollingRate, SensorKind, MAX_DEBOUNCE_MS,
+    MAX_LED_SPEED, MAX_SLEEP_MINUTES, MIN_DEBOUNCE_MS, MIN_LED_SPEED, MIN_SLEEP_MINUTES,
 };
 
 const UDEV_HELP_CMD: &str =
@@ -151,11 +161,9 @@ struct QmlStageEntry {
 
 struct ActiveConnection {
     device: Option<HatorDevice<HidapiTransport>>,
-    sensor: SensorKind,
-    max_stages: u8,
+    caps: DeviceCapabilities,
     config: MouseConfig,
     device_name: String,
-    connection_mode: String,
     firmware_version: String,
     battery: Option<BatteryStatus>,
 }
@@ -192,13 +200,21 @@ pub struct MouseControllerRust {
     dpi_led_brightness: i32,
     dpi_led_speed: i32,
     polling_rate_hz: i32,
+    max_polling_rate_hz: i32,
+    supported_polling_rates_json: QString,
+    polling_rate_limit_note: QString,
     lod_level: i32,
+    supports_lod: bool,
     debounce_ms: i32,
     sleep_minutes: i32,
     motion_sync: bool,
+    supports_motion_sync: bool,
     angle_snapping: bool,
+    supports_angle_snapping: bool,
     ripple_control: bool,
+    supports_ripple_control: bool,
     high_performance: bool,
+    supports_high_performance: bool,
 
     active: Option<ActiveConnection>,
     poll_ticks: u32,
@@ -208,6 +224,7 @@ pub struct MouseControllerRust {
 impl Default for MouseControllerRust {
     fn default() -> Self {
         let sensor = SensorKind::Paw3950;
+        let spec = sensor.spec();
         let cfg = MouseConfig::demo_default(sensor);
         let stages_json = serialize_stages(&cfg, 6);
         let active_st = &cfg.stages[cfg.active_dpi_stage as usize];
@@ -218,7 +235,7 @@ impl Default for MouseControllerRust {
             demo_mode: false,
             device_name: QString::from("No HATOR Mouse Connected"),
             connection_mode: QString::from("Disconnected"),
-            sensor_name: QString::from(sensor.spec().name),
+            sensor_name: QString::from(spec.name),
             firmware_version: QString::from("--"),
             status_message: QString::from("Scanning for HATOR USB HID devices..."),
             error_message: QString::from(""),
@@ -226,11 +243,11 @@ impl Default for MouseControllerRust {
             battery_percent: 0,
             battery_charging: false,
             battery_mv: 0,
-            dpi_min: sensor.spec().min_dpi as i32,
-            dpi_max: sensor.spec().max_dpi as i32,
-            dpi_step: sensor.spec().base_step as i32,
-            supports_xy: sensor.spec().supports_independent_xy,
-            supports_sub_mm_lod: sensor.spec().supports_lod_07mm,
+            dpi_min: spec.min_dpi as i32,
+            dpi_max: spec.max_dpi as i32,
+            dpi_step: spec.base_step as i32,
+            supports_xy: spec.supports_independent_xy,
+            supports_sub_mm_lod: spec.supports_lod_07mm,
             max_stages: 6,
             stage_count: i32::from(cfg.dpi_stage_count),
             active_stage: i32::from(cfg.active_dpi_stage),
@@ -243,13 +260,21 @@ impl Default for MouseControllerRust {
             dpi_led_brightness: i32::from(cfg.dpi_led_brightness),
             dpi_led_speed: i32::from(cfg.dpi_led_speed),
             polling_rate_hz: cfg.polling_rate.hz() as i32,
+            max_polling_rate_hz: 1000,
+            supported_polling_rates_json: QString::from("[125,250,500,1000]"),
+            polling_rate_limit_note: QString::from(""),
             lod_level: cfg.lod as i32,
+            supports_lod: spec.supports_lod,
             debounce_ms: i32::from(cfg.debounce_ms),
             sleep_minutes: i32::from((cfg.sleep_units_10s / 6).max(1)),
             motion_sync: cfg.motion_sync,
+            supports_motion_sync: spec.supports_motion_sync,
             angle_snapping: cfg.angle_snapping,
+            supports_angle_snapping: spec.supports_angle_snapping,
             ripple_control: cfg.ripple_control,
+            supports_ripple_control: spec.supports_ripple_control,
             high_performance: cfg.high_performance,
+            supports_high_performance: spec.supports_sensor_mode,
             active: None,
             poll_ticks: 0,
             startup_demo_checked: false,
@@ -288,6 +313,15 @@ fn serialize_stages(cfg: &MouseConfig, max_stages: u8) -> String {
         })
         .collect();
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn serialize_polling_rates(caps: &DeviceCapabilities) -> String {
+    let rates: Vec<u32> = caps
+        .supported_polling_rates()
+        .iter()
+        .map(|r| r.hz())
+        .collect();
+    serde_json::to_string(&rates).unwrap_or_else(|_| "[125,250,500,1000]".to_string())
 }
 
 fn should_start_in_demo() -> bool {
@@ -373,7 +407,7 @@ impl qobject::MouseController {
         };
 
         let mut dev = HatorDevice::new(transport);
-        let (_info, profile) = match dev.profile() {
+        let (_info, caps) = match dev.capabilities(&meta, None) {
             Ok(res) => res,
             Err(err) => {
                 self.as_mut().set_connected(false);
@@ -400,9 +434,9 @@ impl qobject::MouseController {
             self.as_mut()
                 .set_device_name(QString::from(&meta.product_name));
             self.as_mut()
-                .set_connection_mode(QString::from(meta.connection.label()));
+                .set_connection_mode(QString::from(caps.connection_label()));
             self.as_mut()
-                .set_sensor_name(QString::from(profile.sensor.spec().name));
+                .set_sensor_name(QString::from(caps.sensor_spec().name));
             self.as_mut().set_firmware_version(QString::from(&fw));
             self.as_mut()
                 .set_status_message(QString::from("Receiver detected, but mouse is asleep"));
@@ -414,7 +448,7 @@ impl qobject::MouseController {
 
         let _ = dev.set_pc_driver_status(true);
         let battery = dev.read_battery().ok();
-        let cfg = match dev.read_config(profile.sensor) {
+        let cfg = match dev.read_config(caps.sensor) {
             Ok(c) => c,
             Err(err) => {
                 self.as_mut().set_connected(false);
@@ -427,11 +461,9 @@ impl qobject::MouseController {
 
         self.as_mut().rust_mut().active = Some(ActiveConnection {
             device: Some(dev),
-            sensor: profile.sensor,
-            max_stages: profile.max_dpi_stages,
+            caps,
             config: cfg,
             device_name: meta.product_name.clone(),
-            connection_mode: meta.connection.label().to_string(),
             firmware_version: fw,
             battery,
         });
@@ -450,14 +482,19 @@ impl qobject::MouseController {
         }
 
         let sensor = SensorKind::Paw3950;
+        let caps = DeviceCapabilities::resolve(
+            profile_for_mid(8),
+            sensor,
+            5,
+            ConnectionKind::Wireless8K,
+            "HATOR Quasar 3 Ultra 8K+8K Wireless",
+        );
         let cfg = MouseConfig::demo_default(sensor);
         self.as_mut().rust_mut().active = Some(ActiveConnection {
             device: None,
-            sensor,
-            max_stages: 6,
+            caps,
             config: cfg,
-            device_name: "HATOR Quasar 3 Wireless (Demo)".to_string(),
-            connection_mode: "Demo Preview".to_string(),
+            device_name: "HATOR Quasar 3 Ultra 8K+8K Wireless (Demo)".to_string(),
             firmware_version: "v1.05".to_string(),
             battery: Some(BatteryStatus {
                 percent: 84,
@@ -489,7 +526,7 @@ impl qobject::MouseController {
 
     pub fn apply_stage_count(self: Pin<&mut Self>, count: i32) {
         self.mutate_config(|conn| {
-            let clamped = count.clamp(1, i32::from(conn.max_stages)) as u8;
+            let clamped = count.clamp(1, i32::from(conn.caps.max_dpi_stages)) as u8;
             conn.config.dpi_stage_count = clamped;
             if conn.config.active_dpi_stage >= clamped {
                 conn.config.active_dpi_stage = clamped - 1;
@@ -502,13 +539,22 @@ impl qobject::MouseController {
         let linked = *self.xy_linked();
         let target_y = if linked { dpi_x } else { dpi_y };
         self.as_mut().mutate_config(|conn| {
-            if !(0..8).contains(&stage_index) {
-                return Err("Stage index out of range".to_string());
+            let max_stages = i32::from(conn.caps.max_dpi_stages);
+            if !(0..max_stages).contains(&stage_index) {
+                return Err(format!(
+                    "Stage index out of range (valid: 1..={max_stages})"
+                ));
             }
             let idx = stage_index as usize;
-            let sensor = conn.sensor;
+            let spec = conn.caps.sensor_spec();
+            let clamped_x = dpi_x.clamp(spec.min_dpi as i32, conn.caps.max_dpi as i32) as u32;
+            let clamped_y = if conn.caps.supports_independent_xy() {
+                target_y.clamp(spec.min_dpi as i32, conn.caps.max_dpi as i32) as u32
+            } else {
+                clamped_x
+            };
             conn.config
-                .set_stage_dpi(idx, dpi_x.max(50) as u32, target_y.max(50) as u32, sensor);
+                .set_stage_dpi(idx, clamped_x, clamped_y, conn.caps.sensor);
             let st = &conn.config.stages[idx];
             if st.dpi_x == st.dpi_y {
                 Ok(format!("Stage {} set to {} DPI", idx + 1, st.dpi_x))
@@ -524,6 +570,13 @@ impl qobject::MouseController {
     }
 
     pub fn apply_xy_linked(mut self: Pin<&mut Self>, linked: bool) {
+        if !linked && !*self.supports_xy() {
+            self.as_mut().set_xy_linked(true);
+            self.as_mut().set_error_message(QString::from(
+                "Independent X/Y DPI is not supported by this mouse sensor",
+            ));
+            return;
+        }
         self.as_mut().set_xy_linked(linked);
         if linked {
             let active_idx = *self.active_stage();
@@ -541,8 +594,11 @@ impl qobject::MouseController {
             return;
         };
         self.mutate_config(|conn| {
-            if !(0..8).contains(&stage_index) {
-                return Err("Stage index out of range".to_string());
+            let max_stages = i32::from(conn.caps.max_dpi_stages);
+            if !(0..max_stages).contains(&stage_index) {
+                return Err(format!(
+                    "Stage index out of range (valid: 1..={max_stages})"
+                ));
             }
             conn.config.stages[stage_index as usize].color = rgb;
             Ok(format!(
@@ -561,24 +617,53 @@ impl qobject::MouseController {
                 _ => DpiLedMode::Breathing,
             };
             conn.config.dpi_led_brightness = brightness.clamp(0, 255) as u8;
-            conn.config.dpi_led_speed = speed.clamp(1, 5) as u8;
+            conn.config.dpi_led_speed =
+                speed.clamp(i32::from(MIN_LED_SPEED), i32::from(MAX_LED_SPEED)) as u8;
             Ok("Updated DPI indicator LED settings".to_string())
         });
     }
 
-    pub fn set_polling_rate(self: Pin<&mut Self>, hz: i32) {
+    pub fn set_polling_rate(mut self: Pin<&mut Self>, hz: i32) {
         let Some(rate) = PollingRate::from_hz(hz.max(0) as u32) else {
+            self.as_mut()
+                .set_error_message(QString::from(&format!("Unsupported polling rate {hz} Hz")));
             return;
         };
         self.mutate_config(|conn| {
+            if !conn.caps.supports_polling_rate(rate) {
+                return Err(format!(
+                    "Polling rate {} Hz is not supported on {} (max {} Hz)",
+                    rate.hz(),
+                    conn.caps.connection_label(),
+                    conn.caps.max_polling_rate.hz(),
+                ));
+            }
             conn.config.polling_rate = rate;
             Ok(format!("Polling rate set to {} Hz", rate.hz()))
         });
     }
 
-    pub fn set_lod(self: Pin<&mut Self>, level: i32) {
+    pub fn set_lod(mut self: Pin<&mut Self>, level: i32) {
+        let lod = match level {
+            1 => LodLevel::Mm1,
+            2 => LodLevel::Mm2,
+            3 => LodLevel::Mm07,
+            _ => {
+                self.as_mut().set_error_message(QString::from(&format!(
+                    "Unsupported LOD level code {level}"
+                )));
+                return;
+            }
+        };
         self.mutate_config(|conn| {
-            conn.config.lod = LodLevel::from_wire(level.clamp(1, 3) as u8);
+            if !conn.caps.supports_lod_level(lod) {
+                return Err(format!(
+                    "Lift-off distance {} is not supported by {}",
+                    lod.label(),
+                    conn.caps.sensor_spec().name
+                ));
+            }
+            conn.config.lod = lod;
             Ok(format!(
                 "Lift-off distance set to {}",
                 conn.config.lod.label()
@@ -588,7 +673,7 @@ impl qobject::MouseController {
 
     pub fn apply_debounce_ms(self: Pin<&mut Self>, ms: i32) {
         self.mutate_config(|conn| {
-            let clamped = ms.clamp(0, 30) as u8;
+            let clamped = ms.clamp(i32::from(MIN_DEBOUNCE_MS), i32::from(MAX_DEBOUNCE_MS)) as u8;
             conn.config.debounce_ms = clamped;
             Ok(format!("Debounce time set to {clamped} ms"))
         });
@@ -596,7 +681,8 @@ impl qobject::MouseController {
 
     pub fn apply_sleep_minutes(self: Pin<&mut Self>, minutes: i32) {
         self.mutate_config(|conn| {
-            let mins = minutes.clamp(1, 40) as u8;
+            let mins =
+                minutes.clamp(i32::from(MIN_SLEEP_MINUTES), i32::from(MAX_SLEEP_MINUTES)) as u8;
             conn.config.sleep_units_10s = mins.saturating_mul(6);
             Ok(format!("Sleep timer set to {mins} min"))
         });
@@ -604,6 +690,12 @@ impl qobject::MouseController {
 
     pub fn apply_motion_sync(self: Pin<&mut Self>, enabled: bool) {
         self.mutate_config(|conn| {
+            if enabled && !conn.caps.supports_motion_sync() {
+                return Err(format!(
+                    "Motion Sync is not supported by {}",
+                    conn.caps.sensor_spec().name
+                ));
+            }
             conn.config.motion_sync = enabled;
             Ok(format!(
                 "Motion Sync {}",
@@ -614,6 +706,12 @@ impl qobject::MouseController {
 
     pub fn apply_angle_snapping(self: Pin<&mut Self>, enabled: bool) {
         self.mutate_config(|conn| {
+            if enabled && !conn.caps.supports_angle_snapping() {
+                return Err(format!(
+                    "Angle Snapping is not supported by {}",
+                    conn.caps.sensor_spec().name
+                ));
+            }
             conn.config.angle_snapping = enabled;
             Ok(format!(
                 "Angle Snapping {}",
@@ -624,6 +722,12 @@ impl qobject::MouseController {
 
     pub fn apply_ripple_control(self: Pin<&mut Self>, enabled: bool) {
         self.mutate_config(|conn| {
+            if enabled && !conn.caps.supports_ripple_control() {
+                return Err(format!(
+                    "Ripple Control is not supported by {}",
+                    conn.caps.sensor_spec().name
+                ));
+            }
             conn.config.ripple_control = enabled;
             Ok(format!(
                 "Ripple Control {}",
@@ -634,6 +738,12 @@ impl qobject::MouseController {
 
     pub fn apply_high_performance(self: Pin<&mut Self>, enabled: bool) {
         self.mutate_config(|conn| {
+            if enabled && !conn.caps.supports_sensor_mode() {
+                return Err(format!(
+                    "High Performance Mode is not supported by {}",
+                    conn.caps.sensor_spec().name
+                ));
+            }
             conn.config.high_performance = enabled;
             Ok(format!(
                 "High Performance Mode {}",
@@ -652,7 +762,7 @@ impl qobject::MouseController {
                 if let Err(err) = dev.factory_reset() {
                     Err(err.to_string())
                 } else {
-                    match dev.read_config(conn.sensor) {
+                    match dev.read_config(conn.caps.sensor) {
                         Ok(cfg) => {
                             conn.config = cfg;
                             Ok("Restored factory mouse defaults".to_string())
@@ -661,7 +771,7 @@ impl qobject::MouseController {
                     }
                 }
             } else {
-                conn.config = MouseConfig::demo_default(conn.sensor);
+                conn.config = MouseConfig::demo_default(conn.caps.sensor);
                 Ok("Restored factory demo defaults".to_string())
             }
         };
@@ -749,7 +859,7 @@ impl qobject::MouseController {
             match mutator(conn) {
                 Ok(msg) => {
                     if let Some(dev) = conn.device.as_mut() {
-                        match dev.apply_config_diff(&prev, &conn.config, conn.sensor) {
+                        match dev.apply_config_diff(&prev, &conn.config, &conn.caps) {
                             Ok(()) => Ok((msg, false)),
                             Err(err) => {
                                 let offline = matches!(err, HidError::MouseOffline);
@@ -794,32 +904,40 @@ impl qobject::MouseController {
             let Some(conn) = rust.active.as_ref() else {
                 return;
             };
-            let spec = conn.sensor.spec();
+            let spec = conn.caps.sensor_spec();
             let active_idx = (conn.config.active_dpi_stage as usize).min(7);
             let active_st = &conn.config.stages[active_idx];
             (
                 conn.device_name.clone(),
-                conn.connection_mode.clone(),
+                conn.caps.connection_label().to_string(),
                 spec.name.to_string(),
                 conn.firmware_version.clone(),
                 conn.battery,
                 spec.min_dpi as i32,
-                spec.max_dpi as i32,
-                conn.sensor.step_for(active_st.dpi_x) as i32,
-                spec.supports_independent_xy,
+                conn.caps.max_dpi as i32,
+                conn.caps.sensor.step_for(active_st.dpi_x) as i32,
+                conn.caps.supports_independent_xy(),
+                conn.caps.supports_lod(),
                 spec.supports_lod_07mm,
-                i32::from(conn.max_stages),
+                conn.caps.supports_motion_sync(),
+                conn.caps.supports_angle_snapping(),
+                conn.caps.supports_ripple_control(),
+                conn.caps.supports_sensor_mode(),
+                i32::from(conn.caps.max_dpi_stages),
                 i32::from(conn.config.dpi_stage_count),
                 active_idx as i32,
                 active_st.dpi_x as i32,
                 active_st.dpi_y as i32,
                 format_hex(active_st.color),
-                active_st.dpi_x == active_st.dpi_y,
-                serialize_stages(&conn.config, conn.max_stages),
+                !conn.caps.supports_independent_xy() || active_st.dpi_x == active_st.dpi_y,
+                serialize_stages(&conn.config, conn.caps.max_dpi_stages),
                 conn.config.dpi_led_mode as i32,
                 i32::from(conn.config.dpi_led_brightness),
                 i32::from(conn.config.dpi_led_speed),
                 conn.config.polling_rate.hz() as i32,
+                conn.caps.max_polling_rate.hz() as i32,
+                serialize_polling_rates(&conn.caps),
+                conn.caps.polling_limit_note(),
                 conn.config.lod as i32,
                 i32::from(conn.config.debounce_ms),
                 i32::from((conn.config.sleep_units_10s / 6).max(1)),
@@ -840,7 +958,12 @@ impl qobject::MouseController {
             dpi_max,
             dpi_step,
             supports_xy,
+            supports_lod,
             supports_sub_mm_lod,
+            supports_motion_sync,
+            supports_angle_snapping,
+            supports_ripple_control,
+            supports_high_performance,
             max_stages,
             stage_count,
             active_stage,
@@ -853,6 +976,9 @@ impl qobject::MouseController {
             dpi_led_brightness,
             dpi_led_speed,
             polling_rate_hz,
+            max_polling_rate_hz,
+            supported_polling_rates_json,
+            polling_rate_limit_note,
             lod_level,
             debounce_ms,
             sleep_minutes,
@@ -879,7 +1005,15 @@ impl qobject::MouseController {
         self.as_mut().set_dpi_max(dpi_max);
         self.as_mut().set_dpi_step(dpi_step);
         self.as_mut().set_supports_xy(supports_xy);
+        self.as_mut().set_supports_lod(supports_lod);
         self.as_mut().set_supports_sub_mm_lod(supports_sub_mm_lod);
+        self.as_mut().set_supports_motion_sync(supports_motion_sync);
+        self.as_mut()
+            .set_supports_angle_snapping(supports_angle_snapping);
+        self.as_mut()
+            .set_supports_ripple_control(supports_ripple_control);
+        self.as_mut()
+            .set_supports_high_performance(supports_high_performance);
         self.as_mut().set_max_stages(max_stages);
         self.as_mut().set_stage_count(stage_count);
         self.as_mut().set_active_stage(active_stage);
@@ -892,6 +1026,11 @@ impl qobject::MouseController {
         self.as_mut().set_dpi_led_brightness(dpi_led_brightness);
         self.as_mut().set_dpi_led_speed(dpi_led_speed);
         self.as_mut().set_polling_rate_hz(polling_rate_hz);
+        self.as_mut().set_max_polling_rate_hz(max_polling_rate_hz);
+        self.as_mut()
+            .set_supported_polling_rates_json(QString::from(&supported_polling_rates_json));
+        self.as_mut()
+            .set_polling_rate_limit_note(QString::from(&polling_rate_limit_note));
         self.as_mut().set_lod_level(lod_level);
         self.as_mut().set_debounce_ms(debounce_ms);
         self.as_mut().set_sleep_minutes(sleep_minutes);

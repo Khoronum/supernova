@@ -3,10 +3,17 @@
 //! Reverse-engineered from `HIDUsb.dll` (`MouseConfigParser`, `ProtocolDataParser`,
 //! `ProtocolDataCompareUpdate`).
 
-use crate::devices::{DEFAULT_DPI_COLORS, DEFAULT_DPI_GRADES};
+use crate::devices::{DEFAULT_DPI_COLORS, DEFAULT_DPI_GRADES, DeviceCapabilities};
 use crate::protocol::{FLASH_TOTAL_LEN, compx_checksum};
 use crate::sensor::SensorKind;
 use serde::{Deserialize, Serialize};
+
+pub const MIN_DEBOUNCE_MS: u8 = 0;
+pub const MAX_DEBOUNCE_MS: u8 = 30;
+pub const MIN_SLEEP_MINUTES: u8 = 1;
+pub const MAX_SLEEP_MINUTES: u8 = 40;
+pub const MIN_LED_SPEED: u8 = 1;
+pub const MAX_LED_SPEED: u8 = 5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PollingRate {
@@ -20,6 +27,51 @@ pub enum PollingRate {
 }
 
 impl PollingRate {
+    pub const ALL: &'static [Self] = &[
+        Self::Hz125,
+        Self::Hz250,
+        Self::Hz500,
+        Self::Hz1000,
+        Self::Hz2000,
+        Self::Hz4000,
+        Self::Hz8000,
+    ];
+    pub const RATES_1K: &'static [Self] = &[Self::Hz125, Self::Hz250, Self::Hz500, Self::Hz1000];
+    pub const RATES_2K: &'static [Self] = &[
+        Self::Hz125,
+        Self::Hz250,
+        Self::Hz500,
+        Self::Hz1000,
+        Self::Hz2000,
+    ];
+    pub const RATES_4K: &'static [Self] = &[
+        Self::Hz125,
+        Self::Hz250,
+        Self::Hz500,
+        Self::Hz1000,
+        Self::Hz2000,
+        Self::Hz4000,
+    ];
+    pub const RATES_8K: &'static [Self] = Self::ALL;
+
+    #[must_use]
+    pub const fn min_rate(self, other: Self) -> Self {
+        if self.hz() <= other.hz() { self } else { other }
+    }
+
+    #[must_use]
+    pub const fn rates_up_to(max: Self) -> &'static [Self] {
+        match max {
+            Self::Hz125 => &[Self::Hz125],
+            Self::Hz250 => &[Self::Hz125, Self::Hz250],
+            Self::Hz500 => &[Self::Hz125, Self::Hz250, Self::Hz500],
+            Self::Hz1000 => Self::RATES_1K,
+            Self::Hz2000 => Self::RATES_2K,
+            Self::Hz4000 => Self::RATES_4K,
+            Self::Hz8000 => Self::RATES_8K,
+        }
+    }
+
     #[must_use]
     pub const fn from_wire(b: u8) -> Self {
         match b {
@@ -59,6 +111,18 @@ impl PollingRate {
             Self::Hz4000 => 4000,
             Self::Hz8000 => 8000,
         }
+    }
+}
+
+impl PartialOrd for PollingRate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PollingRate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.hz().cmp(&other.hz())
     }
 }
 
@@ -147,6 +211,80 @@ pub struct DpiStage {
     pub raw_dpi: [u8; 3],
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ConfigValidationError {
+    #[error(
+        "Polling rate {requested_hz} Hz is not supported on {context} (max {max_hz} Hz; supported: {})",
+        format_hz_list(.supported_hz)
+    )]
+    UnsupportedPollingRate {
+        requested_hz: u32,
+        max_hz: u32,
+        supported_hz: Vec<u32>,
+        context: String,
+    },
+    #[error(
+        "DPI stage count {count} exceeds supported maximum of {max_stages} (valid: 1..={max_stages})"
+    )]
+    InvalidStageCount { count: u8, max_stages: u8 },
+    #[error("Active DPI stage {} exceeds enabled stage count {enabled_count}", .stage + 1)]
+    InvalidActiveStage { stage: u8, enabled_count: u8 },
+    #[error("DPI stage {stage} is out of range (valid: 1..={max_stages})")]
+    StageOutOfRange { stage: u8, max_stages: u8 },
+    #[error(
+        "DPI {dpi} for stage {stage} is outside {sensor_name} supported range ({min_dpi}..={max_dpi})"
+    )]
+    DpiOutOfRange {
+        stage: u8,
+        dpi: u32,
+        min_dpi: u32,
+        max_dpi: u32,
+        sensor_name: &'static str,
+    },
+    #[error("Independent X/Y DPI on stage {stage} is not supported by {sensor_name}")]
+    IndependentXyUnsupported {
+        stage: u8,
+        sensor_name: &'static str,
+    },
+    #[error("Lift-off distance {} is not supported by {sensor_name}", .lod.label())]
+    LodUnsupported {
+        lod: LodLevel,
+        sensor_name: &'static str,
+    },
+    #[error("{feature} is not supported by {sensor_name}")]
+    FeatureUnsupported {
+        feature: &'static str,
+        sensor_name: &'static str,
+    },
+    #[error("Debounce time {ms} ms is out of range (valid: {min_ms}..={max_ms} ms)")]
+    DebounceOutOfRange { ms: u8, min_ms: u8, max_ms: u8 },
+    #[error(
+        "Sleep timeout {} min is out of range (valid: {}..={} min)",
+        .units_10s / 6,
+        .min_units / 6,
+        .max_units / 6
+    )]
+    SleepTimeoutOutOfRange {
+        units_10s: u8,
+        min_units: u8,
+        max_units: u8,
+    },
+    #[error("LED speed {speed} is out of range (valid: {min_speed}..={max_speed})")]
+    LedSpeedOutOfRange {
+        speed: u8,
+        min_speed: u8,
+        max_speed: u8,
+    },
+}
+
+fn format_hz_list(rates: &[u32]) -> String {
+    rates
+        .iter()
+        .map(|hz| format!("{hz} Hz"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MouseConfig {
     pub polling_rate: PollingRate,
@@ -192,7 +330,7 @@ impl MouseConfig {
             dpi_led_brightness: 0x80,
             dpi_led_speed: 3,
             debounce_ms: 8,
-            motion_sync: true,
+            motion_sync: sensor.spec().supports_motion_sync,
             sleep_units_10s: 6,
             angle_snapping: false,
             ripple_control: false,
@@ -409,6 +547,289 @@ impl MouseConfig {
         self.stages[index].dpi_y = dy;
         self.stages[index].raw_dpi = raw;
     }
+
+    /// Validate all fields of this configuration against resolved device capabilities.
+    pub fn validate(&self, caps: &DeviceCapabilities) -> Result<(), ConfigValidationError> {
+        let spec = caps.sensor_spec();
+        validate_polling_rate(self.polling_rate, caps)?;
+
+        if !(1..=caps.max_dpi_stages).contains(&self.dpi_stage_count) {
+            return Err(ConfigValidationError::InvalidStageCount {
+                count: self.dpi_stage_count,
+                max_stages: caps.max_dpi_stages,
+            });
+        }
+        if self.active_dpi_stage >= self.dpi_stage_count
+            || self.active_dpi_stage >= caps.max_dpi_stages
+        {
+            return Err(ConfigValidationError::InvalidActiveStage {
+                stage: self.active_dpi_stage,
+                enabled_count: self.dpi_stage_count,
+            });
+        }
+        if !caps.supports_lod_level(self.lod) && (caps.supports_lod() || self.lod != LodLevel::Mm1)
+        {
+            return Err(ConfigValidationError::LodUnsupported {
+                lod: self.lod,
+                sensor_name: spec.name,
+            });
+        }
+
+        for i in 0..caps.max_dpi_stages.min(8) as usize {
+            validate_stage_dpi(i, &self.stages[i], caps)?;
+        }
+
+        validate_bounds(self.dpi_led_speed, self.debounce_ms, self.sleep_units_10s)?;
+
+        if self.motion_sync && !caps.supports_motion_sync() {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Motion Sync",
+                sensor_name: spec.name,
+            });
+        }
+        if self.angle_snapping && !caps.supports_angle_snapping() {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Angle Snapping",
+                sensor_name: spec.name,
+            });
+        }
+        if self.ripple_control && !caps.supports_ripple_control() {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Ripple Control",
+                sensor_name: spec.name,
+            });
+        }
+        if (self.high_performance || self.sensor_mode != SensorMode::LowPower)
+            && !caps.supports_sensor_mode()
+        {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "High Performance / Sensor Mode",
+                sensor_name: spec.name,
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Validate only the fields that changed between `self` and `next` against `caps`.
+    ///
+    /// Pre-existing out-of-spec values in unrelated flash fields do not block valid edits or
+    /// downgrades back into the supported range.
+    pub fn validate_diff(
+        &self,
+        next: &Self,
+        caps: &DeviceCapabilities,
+    ) -> Result<(), ConfigValidationError> {
+        let spec = caps.sensor_spec();
+
+        if self.polling_rate != next.polling_rate {
+            validate_polling_rate(next.polling_rate, caps)?;
+        }
+
+        if self.dpi_stage_count != next.dpi_stage_count
+            && !(1..=caps.max_dpi_stages).contains(&next.dpi_stage_count)
+        {
+            return Err(ConfigValidationError::InvalidStageCount {
+                count: next.dpi_stage_count,
+                max_stages: caps.max_dpi_stages,
+            });
+        }
+
+        if (self.active_dpi_stage != next.active_dpi_stage
+            || self.dpi_stage_count != next.dpi_stage_count)
+            && (next.active_dpi_stage >= next.dpi_stage_count
+                || next.active_dpi_stage >= caps.max_dpi_stages)
+        {
+            return Err(ConfigValidationError::InvalidActiveStage {
+                stage: next.active_dpi_stage,
+                enabled_count: next.dpi_stage_count,
+            });
+        }
+
+        if self.lod != next.lod && !caps.supports_lod_level(next.lod) {
+            return Err(ConfigValidationError::LodUnsupported {
+                lod: next.lod,
+                sensor_name: spec.name,
+            });
+        }
+
+        for i in 0..8 {
+            let stage_dpi_changed = self.stages[i].dpi_x != next.stages[i].dpi_x
+                || self.stages[i].dpi_y != next.stages[i].dpi_y
+                || self.stages[i].raw_dpi != next.stages[i].raw_dpi;
+            if stage_dpi_changed {
+                validate_stage_dpi(i, &next.stages[i], caps)?;
+            }
+            if self.stages[i].color != next.stages[i].color && (i as u8) >= caps.max_dpi_stages {
+                return Err(ConfigValidationError::StageOutOfRange {
+                    stage: (i + 1) as u8,
+                    max_stages: caps.max_dpi_stages,
+                });
+            }
+        }
+
+        if self.dpi_led_speed != next.dpi_led_speed
+            && !(MIN_LED_SPEED..=MAX_LED_SPEED).contains(&next.dpi_led_speed)
+        {
+            return Err(ConfigValidationError::LedSpeedOutOfRange {
+                speed: next.dpi_led_speed,
+                min_speed: MIN_LED_SPEED,
+                max_speed: MAX_LED_SPEED,
+            });
+        }
+
+        if self.debounce_ms != next.debounce_ms
+            && !(MIN_DEBOUNCE_MS..=MAX_DEBOUNCE_MS).contains(&next.debounce_ms)
+        {
+            return Err(ConfigValidationError::DebounceOutOfRange {
+                ms: next.debounce_ms,
+                min_ms: MIN_DEBOUNCE_MS,
+                max_ms: MAX_DEBOUNCE_MS,
+            });
+        }
+
+        if self.sleep_units_10s != next.sleep_units_10s
+            && !(MIN_SLEEP_MINUTES * 6..=MAX_SLEEP_MINUTES * 6).contains(&next.sleep_units_10s)
+        {
+            return Err(ConfigValidationError::SleepTimeoutOutOfRange {
+                units_10s: next.sleep_units_10s,
+                min_units: MIN_SLEEP_MINUTES * 6,
+                max_units: MAX_SLEEP_MINUTES * 6,
+            });
+        }
+
+        if self.motion_sync != next.motion_sync && next.motion_sync && !caps.supports_motion_sync()
+        {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Motion Sync",
+                sensor_name: spec.name,
+            });
+        }
+        if self.angle_snapping != next.angle_snapping
+            && next.angle_snapping
+            && !caps.supports_angle_snapping()
+        {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Angle Snapping",
+                sensor_name: spec.name,
+            });
+        }
+        if self.ripple_control != next.ripple_control
+            && next.ripple_control
+            && !caps.supports_ripple_control()
+        {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Ripple Control",
+                sensor_name: spec.name,
+            });
+        }
+        if self.high_performance != next.high_performance
+            && next.high_performance
+            && !caps.supports_sensor_mode()
+        {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "High Performance Mode",
+                sensor_name: spec.name,
+            });
+        }
+        if self.sensor_mode != next.sensor_mode && !caps.supports_sensor_mode() {
+            return Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Sensor Mode",
+                sensor_name: spec.name,
+            });
+        }
+
+        Ok(())
+    }
+}
+
+fn validate_polling_rate(
+    rate: PollingRate,
+    caps: &DeviceCapabilities,
+) -> Result<(), ConfigValidationError> {
+    if caps.supports_polling_rate(rate) {
+        return Ok(());
+    }
+    let supported_hz = caps
+        .supported_polling_rates()
+        .iter()
+        .map(|r| r.hz())
+        .collect();
+    Err(ConfigValidationError::UnsupportedPollingRate {
+        requested_hz: rate.hz(),
+        max_hz: caps.max_polling_rate.hz(),
+        supported_hz,
+        context: caps.connection_label().to_string(),
+    })
+}
+
+fn validate_stage_dpi(
+    index: usize,
+    stage: &DpiStage,
+    caps: &DeviceCapabilities,
+) -> Result<(), ConfigValidationError> {
+    let stage_num = (index + 1) as u8;
+    if stage_num > caps.max_dpi_stages {
+        return Err(ConfigValidationError::StageOutOfRange {
+            stage: stage_num,
+            max_stages: caps.max_dpi_stages,
+        });
+    }
+    let spec = caps.sensor_spec();
+    if stage.dpi_x < spec.min_dpi || stage.dpi_x > caps.max_dpi {
+        return Err(ConfigValidationError::DpiOutOfRange {
+            stage: stage_num,
+            dpi: stage.dpi_x,
+            min_dpi: spec.min_dpi,
+            max_dpi: caps.max_dpi,
+            sensor_name: spec.name,
+        });
+    }
+    if stage.dpi_y < spec.min_dpi || stage.dpi_y > caps.max_dpi {
+        return Err(ConfigValidationError::DpiOutOfRange {
+            stage: stage_num,
+            dpi: stage.dpi_y,
+            min_dpi: spec.min_dpi,
+            max_dpi: caps.max_dpi,
+            sensor_name: spec.name,
+        });
+    }
+    if !caps.supports_independent_xy() && stage.dpi_x != stage.dpi_y {
+        return Err(ConfigValidationError::IndependentXyUnsupported {
+            stage: stage_num,
+            sensor_name: spec.name,
+        });
+    }
+    Ok(())
+}
+
+fn validate_bounds(
+    dpi_led_speed: u8,
+    debounce_ms: u8,
+    sleep_units_10s: u8,
+) -> Result<(), ConfigValidationError> {
+    if !(MIN_LED_SPEED..=MAX_LED_SPEED).contains(&dpi_led_speed) {
+        return Err(ConfigValidationError::LedSpeedOutOfRange {
+            speed: dpi_led_speed,
+            min_speed: MIN_LED_SPEED,
+            max_speed: MAX_LED_SPEED,
+        });
+    }
+    if !(MIN_DEBOUNCE_MS..=MAX_DEBOUNCE_MS).contains(&debounce_ms) {
+        return Err(ConfigValidationError::DebounceOutOfRange {
+            ms: debounce_ms,
+            min_ms: MIN_DEBOUNCE_MS,
+            max_ms: MAX_DEBOUNCE_MS,
+        });
+    }
+    if !(MIN_SLEEP_MINUTES * 6..=MAX_SLEEP_MINUTES * 6).contains(&sleep_units_10s) {
+        return Err(ConfigValidationError::SleepTimeoutOutOfRange {
+            units_10s: sleep_units_10s,
+            min_units: MIN_SLEEP_MINUTES * 6,
+            max_units: MAX_SLEEP_MINUTES * 6,
+        });
+    }
+    Ok(())
 }
 
 fn read_u8_checked(flash: &[u8; FLASH_TOTAL_LEN], offset: usize) -> Option<u8> {
@@ -499,5 +920,178 @@ mod tests {
                 vec![0x11, 0x22, 0x33, compx_checksum(&[0x11, 0x22, 0x33])]
             )]
         );
+    }
+
+    #[test]
+    fn polling_rate_ord_uses_hz_not_wire_byte() {
+        assert!(PollingRate::Hz125 < PollingRate::Hz250);
+        assert!(PollingRate::Hz250 < PollingRate::Hz500);
+        assert!(PollingRate::Hz500 < PollingRate::Hz1000);
+        assert!(PollingRate::Hz1000 < PollingRate::Hz2000);
+        assert!(PollingRate::Hz2000 < PollingRate::Hz4000);
+        assert!(PollingRate::Hz4000 < PollingRate::Hz8000);
+        assert_eq!(
+            PollingRate::Hz8000.min_rate(PollingRate::Hz1000),
+            PollingRate::Hz1000
+        );
+    }
+
+    #[test]
+    fn validation_enforces_polling_rate_and_sensor_limits() {
+        use crate::devices::{ConnectionKind, profile_for_mid};
+
+        // Quasar 3 Wireless: MID=7, PAW3311 12K, 1K max
+        let q3_caps = DeviceCapabilities::resolve(
+            profile_for_mid(7),
+            profile_for_mid(7).sensor,
+            0,
+            ConnectionKind::Wireless24G,
+            "HATOR Quasar 3 Wireless",
+        );
+        let base_q3 = MouseConfig::demo_default(q3_caps.sensor);
+        assert!(base_q3.validate(&q3_caps).is_ok());
+
+        for rate in [
+            PollingRate::Hz2000,
+            PollingRate::Hz4000,
+            PollingRate::Hz8000,
+        ] {
+            let mut next = base_q3.clone();
+            next.polling_rate = rate;
+            assert!(matches!(
+                base_q3.validate_diff(&next, &q3_caps),
+                Err(ConfigValidationError::UnsupportedPollingRate { .. })
+            ));
+            assert!(matches!(
+                next.validate(&q3_caps),
+                Err(ConfigValidationError::UnsupportedPollingRate { .. })
+            ));
+        }
+
+        // Downgrading from 8K back to 1K on a 1K connection is allowed
+        let mut bad_8k = base_q3.clone();
+        bad_8k.polling_rate = PollingRate::Hz8000;
+        assert!(bad_8k.validate_diff(&base_q3, &q3_caps).is_ok());
+
+        // Unrelated DPI edit succeeds even if pre-existing flash had 8K polling rate
+        let mut bad_8k_dpi = bad_8k.clone();
+        bad_8k_dpi.set_stage_dpi(0, 800, 800, q3_caps.sensor);
+        assert!(bad_8k.validate_diff(&bad_8k_dpi, &q3_caps).is_ok());
+
+        // Reject DPI > 12000 on Quasar 3 Wireless
+        let mut high_dpi = base_q3.clone();
+        high_dpi.stages[0].dpi_x = 16_000;
+        high_dpi.stages[0].dpi_y = 16_000;
+        assert!(matches!(
+            base_q3.validate_diff(&high_dpi, &q3_caps),
+            Err(ConfigValidationError::DpiOutOfRange { dpi: 16_000, .. })
+        ));
+
+        // Reject independent X/Y on PAW3311
+        let mut xy_diff = base_q3.clone();
+        xy_diff.stages[0].dpi_x = 800;
+        xy_diff.stages[0].dpi_y = 1600;
+        assert!(matches!(
+            base_q3.validate_diff(&xy_diff, &q3_caps),
+            Err(ConfigValidationError::IndependentXyUnsupported { .. })
+        ));
+
+        // Reject LOD change on PAW3311
+        let mut lod_diff = base_q3.clone();
+        lod_diff.lod = LodLevel::Mm2;
+        assert!(matches!(
+            base_q3.validate_diff(&lod_diff, &q3_caps),
+            Err(ConfigValidationError::LodUnsupported { .. })
+        ));
+
+        // Reject Motion Sync on PAW3311
+        let mut ms_diff = base_q3.clone();
+        ms_diff.motion_sync = true;
+        assert!(matches!(
+            base_q3.validate_diff(&ms_diff, &q3_caps),
+            Err(ConfigValidationError::FeatureUnsupported {
+                feature: "Motion Sync",
+                ..
+            })
+        ));
+
+        // Reject stage count > 6
+        let mut stage_cnt = base_q3.clone();
+        stage_cnt.dpi_stage_count = 7;
+        assert!(matches!(
+            base_q3.validate_diff(&stage_cnt, &q3_caps),
+            Err(ConfigValidationError::InvalidStageCount {
+                count: 7,
+                max_stages: 6
+            })
+        ));
+
+        // Reject out-of-range debounce, sleep timeout, and LED speed
+        let mut bad_debounce = base_q3.clone();
+        bad_debounce.debounce_ms = 31;
+        assert!(matches!(
+            base_q3.validate_diff(&bad_debounce, &q3_caps),
+            Err(ConfigValidationError::DebounceOutOfRange { ms: 31, .. })
+        ));
+
+        let mut bad_sleep = base_q3.clone();
+        bad_sleep.sleep_units_10s = 250;
+        assert!(matches!(
+            base_q3.validate_diff(&bad_sleep, &q3_caps),
+            Err(ConfigValidationError::SleepTimeoutOutOfRange { .. })
+        ));
+
+        let mut bad_speed = base_q3.clone();
+        bad_speed.dpi_led_speed = 0;
+        assert!(matches!(
+            base_q3.validate_diff(&bad_speed, &q3_caps),
+            Err(ConfigValidationError::LedSpeedOutOfRange { speed: 0, .. })
+        ));
+
+        // Reject 0.7 mm LOD on PAW3370 and PAW3335
+        for sensor in [SensorKind::Paw3370, SensorKind::Paw3335] {
+            let caps = DeviceCapabilities::resolve(
+                profile_for_mid(8),
+                sensor,
+                2,
+                ConnectionKind::Wired,
+                "HATOR Mouse",
+            );
+            let base = MouseConfig::demo_default(sensor);
+            let mut next = base.clone();
+            next.lod = LodLevel::Mm07;
+            assert!(matches!(
+                base.validate_diff(&next, &caps),
+                Err(ConfigValidationError::LodUnsupported {
+                    lod: LodLevel::Mm07,
+                    ..
+                })
+            ));
+        }
+
+        // Quasar 3 Ultima 8K wired caps at 1K; wireless 8K allows 8K
+        let ultima_wired = DeviceCapabilities::resolve(
+            profile_for_mid(8),
+            SensorKind::Paw3950,
+            2,
+            ConnectionKind::Wired,
+            "HATOR Quasar 3 Ultima 8K Wireless",
+        );
+        let base_ultima = MouseConfig::demo_default(SensorKind::Paw3950);
+        let mut next_8k = base_ultima.clone();
+        next_8k.polling_rate = PollingRate::Hz8000;
+        assert!(matches!(
+            base_ultima.validate_diff(&next_8k, &ultima_wired),
+            Err(ConfigValidationError::UnsupportedPollingRate { .. })
+        ));
+
+        let ultima_wl = DeviceCapabilities::resolve(
+            profile_for_mid(8),
+            SensorKind::Paw3950,
+            5,
+            ConnectionKind::Wireless8K,
+            "HATOR Quasar 3 Ultima 8K Wireless",
+        );
+        assert!(base_ultima.validate_diff(&next_8k, &ultima_wl).is_ok());
     }
 }

@@ -7,10 +7,10 @@ use hidapi::{HidApi, HidDevice};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::MouseConfig;
+use crate::config::{ConfigValidationError, MouseConfig};
 use crate::devices::{
-    ConnectionKind, DeviceProfile, FALLBACK_INTERFACE_NUMBER, HATOR_VID, VENDOR_USAGE,
-    VENDOR_USAGE_PAGE, classify_pid, friendly_product_name, profile_for_mid,
+    ConnectionKind, DeviceCapabilities, DeviceProfile, FALLBACK_INTERFACE_NUMBER, HATOR_VID,
+    VENDOR_USAGE, VENDOR_USAGE_PAGE, classify_pid, friendly_product_name, profile_for_mid,
 };
 use crate::protocol::{
     FLASH_TOTAL_LEN, MAX_FLASH_CHUNK, Opcode, PACKET_LEN, build_packet, build_read_flash_packet,
@@ -33,6 +33,8 @@ pub enum HidError {
     Timeout,
     #[error("HID response checksum or Report ID validation failed")]
     ChecksumMismatch,
+    #[error("Configuration limit violation: {0}")]
+    Validation(#[from] ConfigValidationError),
     #[error("Protocol error: {0}")]
     Protocol(String),
     #[error("HID I/O error: {0}")]
@@ -290,6 +292,23 @@ impl<T: HidTransport> HatorDevice<T> {
         Ok((info, profile_for_mid(info.mid)))
     }
 
+    pub fn capabilities(
+        &mut self,
+        meta: &DiscoveredDevice,
+        sensor_override: Option<SensorKind>,
+    ) -> Result<(DeviceInfo, DeviceCapabilities), HidError> {
+        let (info, profile) = self.profile()?;
+        let sensor = sensor_override.unwrap_or(profile.sensor);
+        let caps = DeviceCapabilities::resolve(
+            profile,
+            sensor,
+            info.device_type,
+            meta.connection,
+            &meta.product_name,
+        );
+        Ok((info, caps))
+    }
+
     pub fn set_pc_driver_status(&mut self, active: bool) -> Result<(), HidError> {
         let pkt = build_packet(Opcode::SetPcDriverStatus, 0, &[u8::from(active)]);
         let _ = self.exchange(&pkt)?;
@@ -363,9 +382,10 @@ impl<T: HidTransport> HatorDevice<T> {
         &mut self,
         old: &MouseConfig,
         new: &MouseConfig,
-        sensor: SensorKind,
+        caps: &DeviceCapabilities,
     ) -> Result<(), HidError> {
-        let writes = old.diff_writes(new, sensor);
+        old.validate_diff(new, caps)?;
+        let writes = old.diff_writes(new, caps.sensor);
         if writes.is_empty() {
             return Ok(());
         }
@@ -550,14 +570,59 @@ mod tests {
         let cfg = dev.read_config(sensor).unwrap();
         assert_eq!(cfg.active_dpi_stage, 2);
 
+        let caps = DeviceCapabilities::resolve(
+            profile_for_mid(8),
+            sensor,
+            5,
+            ConnectionKind::Wireless8K,
+            "HATOR Quasar 3 Ultra 8K+8K Wireless",
+        );
         let mut next = cfg.clone();
         next.active_dpi_stage = 3;
         next.set_stage_dpi(3, 6400, 6400, sensor);
-        dev.apply_config_diff(&cfg, &next, sensor).unwrap();
+        dev.apply_config_diff(&cfg, &next, &caps).unwrap();
 
         let reread = dev.read_config(sensor).unwrap();
         assert_eq!(reread.active_dpi_stage, 3);
         assert_eq!(reread.stages[3].dpi_x, 6400);
         assert_eq!(dev.read_current_dpi_stage().unwrap(), Some(3));
+    }
+
+    #[test]
+    fn apply_config_diff_rejects_8k_on_1k_device_with_zero_writes() {
+        let sensor = SensorKind::Paw3950;
+        let transport = MockTransport::new(sensor);
+        let mut dev = HatorDevice::new(transport);
+        let cfg = dev.read_config(sensor).unwrap();
+        let written_before = dev.into_inner();
+
+        let mut transport2 = MockTransport::new(sensor);
+        transport2.info.device_type = 0; // Wireless 1K
+        let mut dev2 = HatorDevice::new(transport2);
+        let caps_1k = DeviceCapabilities::resolve(
+            profile_for_mid(8),
+            sensor,
+            0,
+            ConnectionKind::Wireless24G,
+            "HATOR Quasar 3 Pro Wireless",
+        );
+        let mut next = cfg.clone();
+        next.polling_rate = PollingRate::Hz8000;
+
+        let err = dev2.apply_config_diff(&cfg, &next, &caps_1k).unwrap_err();
+        assert!(matches!(
+            err,
+            HidError::Validation(ConfigValidationError::UnsupportedPollingRate {
+                requested_hz: 8000,
+                max_hz: 1000,
+                ..
+            })
+        ));
+        let inner = dev2.into_inner();
+        assert!(
+            inner.written_packets.is_empty(),
+            "Validation failure must abort before sending any HID packets"
+        );
+        drop(written_before);
     }
 }

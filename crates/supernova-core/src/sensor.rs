@@ -2,6 +2,7 @@
 //!
 //! Reverse-engineered from `HATOR.exe` (`0x40e120..0x40ee72`) and `driver_sensor.h`.
 
+use crate::config::{LodLevel, PollingRate};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,8 +23,24 @@ pub struct SensorSpec {
     pub min_dpi: u32,
     pub max_dpi: u32,
     pub base_step: u32,
+    pub max_polling_rate: PollingRate,
     pub supports_independent_xy: bool,
+    pub supports_lod: bool,
     pub supports_lod_07mm: bool,
+    pub supports_motion_sync: bool,
+    pub supports_ripple_control: bool,
+    pub supports_angle_snapping: bool,
+    pub supports_sensor_mode: bool,
+}
+
+impl SensorSpec {
+    #[must_use]
+    pub const fn supports_lod_level(&self, lod: LodLevel) -> bool {
+        match lod {
+            LodLevel::Mm07 => self.supports_lod && self.supports_lod_07mm,
+            LodLevel::Mm1 | LodLevel::Mm2 => self.supports_lod,
+        }
+    }
 }
 
 /// PAW3311 register values for `50..=10000` DPI in 50-DPI steps (200 entries).
@@ -93,8 +110,14 @@ impl SensorKind {
                 min_dpi: 50,
                 max_dpi: 30_000,
                 base_step: 50,
+                max_polling_rate: PollingRate::Hz8000,
                 supports_independent_xy: true,
+                supports_lod: true,
                 supports_lod_07mm: true,
+                supports_motion_sync: true,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
             Self::Paw3395 => SensorSpec {
                 kind: self,
@@ -102,8 +125,14 @@ impl SensorKind {
                 min_dpi: 50,
                 max_dpi: 26_000,
                 base_step: 50,
+                max_polling_rate: PollingRate::Hz8000,
                 supports_independent_xy: true,
+                supports_lod: true,
                 supports_lod_07mm: true,
+                supports_motion_sync: true,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
             Self::Paw3311 { max_dpi, .. } => SensorSpec {
                 kind: self,
@@ -111,8 +140,14 @@ impl SensorKind {
                 min_dpi: 50,
                 max_dpi,
                 base_step: 50,
+                max_polling_rate: PollingRate::Hz1000,
                 supports_independent_xy: false,
+                supports_lod: false,
                 supports_lod_07mm: false,
+                supports_motion_sync: false,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
             Self::Paw3335 => SensorSpec {
                 kind: self,
@@ -120,8 +155,14 @@ impl SensorKind {
                 min_dpi: 100,
                 max_dpi: 16_000,
                 base_step: 100,
+                max_polling_rate: PollingRate::Hz1000,
                 supports_independent_xy: false,
+                supports_lod: true,
                 supports_lod_07mm: false,
+                supports_motion_sync: false,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
             Self::Paw3325 => SensorSpec {
                 kind: self,
@@ -129,8 +170,14 @@ impl SensorKind {
                 min_dpi: 200,
                 max_dpi: 5_000,
                 base_step: 100,
+                max_polling_rate: PollingRate::Hz1000,
                 supports_independent_xy: false,
+                supports_lod: false,
                 supports_lod_07mm: false,
+                supports_motion_sync: false,
+                supports_ripple_control: false,
+                supports_angle_snapping: false,
+                supports_sensor_mode: false,
             },
             Self::Paw3370 => SensorSpec {
                 kind: self,
@@ -138,8 +185,14 @@ impl SensorKind {
                 min_dpi: 50,
                 max_dpi: 19_000,
                 base_step: 50,
+                max_polling_rate: PollingRate::Hz1000,
                 supports_independent_xy: true,
+                supports_lod: true,
                 supports_lod_07mm: false,
+                supports_motion_sync: false,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
             Self::GenericLinear => SensorSpec {
                 kind: self,
@@ -147,8 +200,14 @@ impl SensorKind {
                 min_dpi: 50,
                 max_dpi: 30_000,
                 base_step: 50,
+                max_polling_rate: PollingRate::Hz1000,
                 supports_independent_xy: true,
-                supports_lod_07mm: true,
+                supports_lod: true,
+                supports_lod_07mm: false,
+                supports_motion_sync: false,
+                supports_ripple_control: true,
+                supports_angle_snapping: true,
+                supports_sensor_mode: true,
             },
         }
     }

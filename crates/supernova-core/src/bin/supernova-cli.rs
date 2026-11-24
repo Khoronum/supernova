@@ -4,7 +4,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use supernova_core::{
-    HatorDevice, HidError, HidapiTransport, MouseConfig, PollingRate, SensorKind, discover_devices,
+    DeviceCapabilities, DeviceInfo, HatorDevice, HidError, HidapiTransport, LodLevel, MouseConfig,
+    PollingRate, SensorKind, discover_devices,
 };
 
 #[derive(Parser)]
@@ -103,7 +104,8 @@ fn open_first_mouse(
     (
         supernova_core::DiscoveredDevice,
         HatorDevice<HidapiTransport>,
-        SensorKind,
+        DeviceInfo,
+        DeviceCapabilities,
     ),
     String,
 > {
@@ -115,23 +117,26 @@ fn open_first_mouse(
 
     let transport = HidapiTransport::open(&dev_meta.path).map_err(|e| e.to_string())?;
     let mut dev = HatorDevice::new(transport);
-    let (_info, profile) = dev.profile().map_err(|e| e.to_string())?;
-    let sensor = match sensor_override {
-        Some(raw) => parse_sensor_override(raw)?,
-        None => profile.sensor,
+    let sensor_ov = match sensor_override {
+        Some(raw) => Some(parse_sensor_override(raw)?),
+        None => None,
     };
-    Ok((dev_meta, dev, sensor))
+    let (info, caps) = dev
+        .capabilities(&dev_meta, sensor_ov)
+        .map_err(|e| e.to_string())?;
+    Ok((dev_meta, dev, info, caps))
 }
 
-fn print_dpi_summary(cfg: &MouseConfig, sensor: SensorKind) {
-    let spec = sensor.spec();
+fn print_dpi_summary(cfg: &MouseConfig, caps: &DeviceCapabilities) {
+    let spec = caps.sensor_spec();
     println!(
-        "Sensor: {} ({}..={} DPI) | Active Stage: {}/{}",
+        "Sensor: {} ({}..={} DPI) | Active Stage: {}/{} (max {})",
         spec.name,
         spec.min_dpi,
-        spec.max_dpi,
+        caps.max_dpi,
         cfg.active_dpi_stage + 1,
-        cfg.dpi_stage_count
+        cfg.dpi_stage_count,
+        caps.max_dpi_stages
     );
     for idx in 0..cfg.dpi_stage_count as usize {
         let st = &cfg.stages[idx];
@@ -188,19 +193,51 @@ fn run(cli: Cli) -> Result<(), String> {
             Ok(())
         }
         Commands::Status => {
-            let (meta, mut dev, sensor) = open_first_mouse(cli.sensor.as_deref())?;
-            let info = dev.read_device_info().map_err(|e| e.to_string())?;
+            let (meta, mut dev, info, caps) = open_first_mouse(cli.sensor.as_deref())?;
             let online = dev.is_online().map_err(|e| e.to_string())?;
             let fw = dev.read_firmware_version().map_err(|e| e.to_string())?;
             println!(
-                "Device: {} ({:04X}:{:04X}) [{}] CID={} MID={} FW=0x{:04X}",
+                "Device: {} ({:04X}:{:04X}) [{}] CID={} MID={} Type={} FW=0x{:04X}",
                 meta.product_name,
                 meta.vid,
                 meta.pid,
-                meta.connection.label(),
+                caps.connection_label(),
                 info.cid,
                 info.mid,
+                info.device_type,
                 fw
+            );
+            if let Some(model) = caps.model {
+                println!(
+                    "Model Spec: {} ({}) | Sensor: {} (max {} DPI)",
+                    model.name,
+                    model.skus.join(", "),
+                    model.sensor_name,
+                    model.max_dpi
+                );
+            }
+            let supported_rates = caps
+                .supported_polling_rates()
+                .iter()
+                .map(|r| format!("{} Hz", r.hz()))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let lod_cap = if caps.supports_lod_level(LodLevel::Mm07) {
+                "0.7/1.0/2.0 mm"
+            } else if caps.supports_lod() {
+                "1.0/2.0 mm"
+            } else {
+                "unsupported"
+            };
+            println!(
+                "Capabilities: MaxRate={} Hz ({}) | MaxDPI={} | MaxStages={} | XY={} | LOD={} | MotionSync={}",
+                caps.max_polling_rate.hz(),
+                supported_rates,
+                caps.max_dpi,
+                caps.max_dpi_stages,
+                caps.supports_independent_xy(),
+                lod_cap,
+                caps.supports_motion_sync()
             );
             println!("Online: {}", if online { "yes" } else { "no (asleep)" });
             if !online {
@@ -214,7 +251,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     if bat.charging { " [charging]" } else { "" }
                 );
             }
-            let cfg = dev.read_config(sensor).map_err(|e| e.to_string())?;
+            let cfg = dev.read_config(caps.sensor).map_err(|e| e.to_string())?;
             println!(
                 "Polling Rate: {} Hz | LOD: {} | Debounce: {} ms | MotionSync: {} | AngleSnap: {} | Ripple: {}",
                 cfg.polling_rate.hz(),
@@ -224,15 +261,23 @@ fn run(cli: Cli) -> Result<(), String> {
                 cfg.angle_snapping,
                 cfg.ripple_control
             );
-            print_dpi_summary(&cfg, sensor);
+            if cfg.polling_rate > caps.max_polling_rate {
+                println!(
+                    "WARNING: Onboard polling rate ({} Hz) exceeds current connection limit ({} Hz for {}).",
+                    cfg.polling_rate.hz(),
+                    caps.max_polling_rate.hz(),
+                    caps.connection_label()
+                );
+            }
+            print_dpi_summary(&cfg, &caps);
             Ok(())
         }
         Commands::Dpi { action } => {
-            let (_meta, mut dev, sensor) = open_first_mouse(cli.sensor.as_deref())?;
-            let old = dev.read_config(sensor).map_err(|e| e.to_string())?;
+            let (_meta, mut dev, _info, caps) = open_first_mouse(cli.sensor.as_deref())?;
+            let old = dev.read_config(caps.sensor).map_err(|e| e.to_string())?;
             match action {
                 DpiAction::Get => {
-                    print_dpi_summary(&old, sensor);
+                    print_dpi_summary(&old, &caps);
                     Ok(())
                 }
                 DpiAction::Stage { stage } => {
@@ -244,7 +289,7 @@ fn run(cli: Cli) -> Result<(), String> {
                     }
                     let mut next = old.clone();
                     next.active_dpi_stage = stage - 1;
-                    dev.apply_config_diff(&old, &next, sensor)
+                    dev.apply_config_diff(&old, &next, &caps)
                         .map_err(|e| e.to_string())?;
                     println!(
                         "Active DPI stage switched to {} ({} DPI)",
@@ -259,17 +304,44 @@ fn run(cli: Cli) -> Result<(), String> {
                     dpi_y,
                     color,
                 } => {
-                    if !(1..=8).contains(&stage) {
-                        return Err("Stage must be in 1..=8".to_string());
+                    if !(1..=caps.max_dpi_stages).contains(&stage) {
+                        return Err(format!(
+                            "Stage {stage} is out of range (valid: 1..={})",
+                            caps.max_dpi_stages
+                        ));
                     }
+                    let spec = caps.sensor_spec();
+                    if dpi < spec.min_dpi || dpi > caps.max_dpi {
+                        return Err(format!(
+                            "DPI {dpi} is outside {} supported range ({}..={})",
+                            spec.name, spec.min_dpi, caps.max_dpi
+                        ));
+                    }
+                    let target_y = match dpi_y {
+                        Some(y) => {
+                            if !caps.supports_independent_xy() && y != dpi {
+                                return Err(format!(
+                                    "Independent X/Y DPI is not supported by {}",
+                                    spec.name
+                                ));
+                            }
+                            if y < spec.min_dpi || y > caps.max_dpi {
+                                return Err(format!(
+                                    "Y DPI {y} is outside {} supported range ({}..={})",
+                                    spec.name, spec.min_dpi, caps.max_dpi
+                                ));
+                            }
+                            y
+                        }
+                        None => dpi,
+                    };
                     let idx = (stage - 1) as usize;
                     let mut next = old.clone();
-                    let target_y = dpi_y.unwrap_or(dpi);
-                    next.set_stage_dpi(idx, dpi, target_y, sensor);
+                    next.set_stage_dpi(idx, dpi, target_y, caps.sensor);
                     if let Some(hex) = color {
                         next.stages[idx].color = parse_hex_color(&hex)?;
                     }
-                    dev.apply_config_diff(&old, &next, sensor)
+                    dev.apply_config_diff(&old, &next, &caps)
                         .map_err(|e| e.to_string())?;
                     let st = &next.stages[idx];
                     println!(
@@ -279,15 +351,18 @@ fn run(cli: Cli) -> Result<(), String> {
                     Ok(())
                 }
                 DpiAction::Count { count } => {
-                    if !(1..=8).contains(&count) {
-                        return Err("Stage count must be in 1..=8".to_string());
+                    if !(1..=caps.max_dpi_stages).contains(&count) {
+                        return Err(format!(
+                            "Stage count {count} is out of range (valid: 1..={})",
+                            caps.max_dpi_stages
+                        ));
                     }
                     let mut next = old.clone();
                     next.dpi_stage_count = count;
                     if next.active_dpi_stage >= count {
                         next.active_dpi_stage = count - 1;
                     }
-                    dev.apply_config_diff(&old, &next, sensor)
+                    dev.apply_config_diff(&old, &next, &caps)
                         .map_err(|e| e.to_string())?;
                     println!("Enabled DPI stages set to {count}");
                     Ok(())
@@ -300,11 +375,24 @@ fn run(cli: Cli) -> Result<(), String> {
                     "Unsupported polling rate {hz}; valid: 125, 250, 500, 1000, 2000, 4000, 8000"
                 )
             })?;
-            let (_meta, mut dev, sensor) = open_first_mouse(cli.sensor.as_deref())?;
-            let old = dev.read_config(sensor).map_err(|e| e.to_string())?;
+            let (_meta, mut dev, _info, caps) = open_first_mouse(cli.sensor.as_deref())?;
+            if !caps.supports_polling_rate(rate) {
+                let supported = caps
+                    .supported_polling_rates()
+                    .iter()
+                    .map(|r| format!("{} Hz", r.hz()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(format!(
+                    "Polling rate {hz} Hz is not supported on {} (max {} Hz; supported: {supported})",
+                    caps.connection_label(),
+                    caps.max_polling_rate.hz(),
+                ));
+            }
+            let old = dev.read_config(caps.sensor).map_err(|e| e.to_string())?;
             let mut next = old.clone();
             next.polling_rate = rate;
-            dev.apply_config_diff(&old, &next, sensor)
+            dev.apply_config_diff(&old, &next, &caps)
                 .map_err(|e| e.to_string())?;
             println!("Polling rate set to {hz} Hz");
             Ok(())
@@ -313,7 +401,7 @@ fn run(cli: Cli) -> Result<(), String> {
             if !yes {
                 return Err("Pass --yes to confirm factory reset".to_string());
             }
-            let (_meta, mut dev, _sensor) = open_first_mouse(cli.sensor.as_deref())?;
+            let (_meta, mut dev, _info, _caps) = open_first_mouse(cli.sensor.as_deref())?;
             dev.factory_reset().map_err(|e| e.to_string())?;
             println!("Mouse settings reset to factory defaults");
             Ok(())
