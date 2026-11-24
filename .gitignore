@@ -1,0 +1,10 @@
+rev/
+/target/
+.devenv/
+.devenv.*
+devenv.local.nix
+devenv.local.yaml
+result
+result-*
+.qmlls.ini
+PROTO.md

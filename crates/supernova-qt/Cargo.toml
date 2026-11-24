@@ -1,0 +1,20 @@
+[package]
+name = "supernova-qt"
+version = "0.1.0"
+edition = "2021"
+description = "Supernova Qt 6 / QML desktop application for configuring HATOR gaming mice on Linux"
+
+[[bin]]
+name = "supernova"
+path = "src/main.rs"
+
+[dependencies]
+cxx = "1.0"
+cxx-qt = "0.10"
+cxx-qt-lib = { version = "0.10", features = ["qt_full", "link_qt_object_files"] }
+supernova-core = { path = "../supernova-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+cxx-qt-build = { version = "0.10", features = ["link_qt_object_files"] }
