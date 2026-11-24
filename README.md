@@ -11,9 +11,9 @@ Native Linux configuration utility for HATOR gaming mice. Includes a CLI based `
 - **Sensor Support**: Supports features in the following sensors:
   - `PAW3950` (`50–30,000` DPI in 50-DPI steps, independent X/Y, 0.7 / 1 / 2 mm LOD)
   - `PAW3395` (`50–26,000` DPI in 50-DPI steps, independent X/Y, 0.7 / 1 / 2 mm LOD)
-  - `PAW3311` (`50–12,000` / `50–24,000` DPI using exact sensor register LUT & step tiers)
+  - `PAW3311` (`50–12,000` DPI)
   - `PAW3335`, `PAW3325`, `PAW3370`
-- **Performance & Sensor Tuning**: Polling rate (`125`–`8000` Hz), Lift-Off Distance (`0.7` / `1.0` / `2.0` mm), Motion Sync, Angle Snapping, Ripple Control, High Performance Mode, Debounce Time (`0–30` ms), Sleep Timer, DPI Indicator LED mode/brightness/speed, and Factory Reset.
+- **Performance & Sensor Tuning**: Polling rate (`125`–`8000` Hz), Lift-Off Distance (`0.7` / `1.0` / `2.0` mm), Motion Sync, Angle Snapping, Ripple Control, High Performance Mode, Debounce Time (`0–30` ms), Sleep Timer, DPI Indicator LED mode/brightness/speed.
 - **Supported VID/PIDs** (`VID 0x379A`):
   - Wired: `0x0CEF`, `0x0CEB`, `0x3607`, `0x3318`, `0x3319`, `0x3307`, `0x3321`, `0x3330`, `0x3327`
   - 2.4 GHz Wireless: `0x0CF0`,  `0x3608`, `0x3308`, `0x3322`, `0x3331`, `0x3328`
